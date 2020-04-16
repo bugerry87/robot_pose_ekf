@@ -36,6 +36,8 @@
 #ifndef __ODOM_ESTIMATION_NODE__
 #define __ODOM_ESTIMATION_NODE__
 
+#include <vector>
+
 // ros stuff
 #include <ros/ros.h>
 #include <tf/tf.h>
@@ -129,6 +131,7 @@ private:
   ros::Time odom_init_stamp_, imu_init_stamp_, vo_init_stamp_, gps_init_stamp_;
   bool odom_active_, imu_active_, vo_active_, gps_active_;
   bool odom_used_, imu_used_, vo_used_, gps_used_;
+  bool fix_imu_cov_, fix_vo_cov_;
   bool odom_initializing_, imu_initializing_, vo_initializing_, gps_initializing_;
   double timeout_;
   MatrixWrapper::SymmetricMatrix odom_covariance_, imu_covariance_, vo_covariance_, gps_covariance_;
@@ -140,6 +143,8 @@ private:
 
   // counters
   unsigned int odom_callback_counter_, imu_callback_counter_, vo_callback_counter_,gps_callback_counter_, ekf_sent_counter_;
+
+  std::vector<double> imu_cov_, vo_cov_;
 
 }; // class
 

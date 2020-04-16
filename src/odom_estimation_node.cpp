@@ -80,6 +80,11 @@ OdomEstimationNode::OdomEstimationNode()
   nh_private.param("gps_used", gps_used_, false);
   nh_private.param("debug", debug_, false);
   nh_private.param("self_diagnose", self_diagnose_, false);
+  nh_private.param("imu_cov", imu_cov_, {2.89e-8, 2.89e-8, 2.89e-8});
+  nh_private.param("vo_cov", vo_cov_, {0.1, 0.17, 0.0});
+  nh_private.param("fix_imu_cov", fix_imu_cov_, false);
+  nh_private.param("fix_vo_cov", fix_vo_cov_, false);
+
   double freq;
   nh_private.param("freq", freq, 30.0);
 
@@ -88,6 +93,8 @@ OdomEstimationNode::OdomEstimationNode()
   base_frame_ = tf::resolve(tf_prefix_, base_frame_);
 
   ROS_INFO_STREAM("output-frame: " << output_frame_);
+  ROS_INFO("imu_cov: %f %f %f", imu_cov_[0], imu_cov_[1], imu_cov_[2]);
+  ROS_INFO("vo_cov: %f %f %f", vo_cov_[0], vo_cov_[1], vo_cov_[2]);
 
   // set output frame and base frame names in OdomEstimation filter
   // so that user-defined tf frames are respected
@@ -224,6 +231,7 @@ void OdomEstimationNode::imuCallback(const ImuConstPtr& imu)
   assert(imu_used_);
 
   // receive data
+  imu_time_ = Time::now();
   imu_stamp_ = imu->header.stamp;
   tf::Quaternion orientation;
   quaternionMsgToTF(imu->orientation, orientation);
@@ -233,13 +241,13 @@ void OdomEstimationNode::imuCallback(const ImuConstPtr& imu)
       imu_covariance_(i + 1, j + 1) = imu->orientation_covariance[3 * i + j];
 
   // manually set covariance untile imu sends covariance
-  if (imu_covariance_(1, 1) == 0.0)
+  if (fix_imu_cov_ || imu_covariance_(1, 1) == 0.0)
   {
     SymmetricMatrix measNoiseImu_Cov(3);
     measNoiseImu_Cov = 0;
-    measNoiseImu_Cov(1, 1) = pow(0.00017, 2);  // = 0.01 degrees / sec
-    measNoiseImu_Cov(2, 2) = pow(0.00017, 2);  // = 0.01 degrees / sec
-    measNoiseImu_Cov(3, 3) = pow(0.00017, 2);  // = 0.01 degrees / sec
+    measNoiseImu_Cov(1, 1) = imu_cov_[0];  // = 0.01 degrees / sec
+    measNoiseImu_Cov(2, 2) = imu_cov_[1];  // = 0.01 degrees / sec
+    measNoiseImu_Cov(3, 3) = imu_cov_[2];  // = 0.01 degrees / sec
     imu_covariance_ = measNoiseImu_Cov;
   }
 
@@ -262,8 +270,7 @@ void OdomEstimationNode::imuCallback(const ImuConstPtr& imu)
   StampedTransform base_imu_offset;
   robot_state_.lookupTransform(base_frame_, imu->header.frame_id, imu_stamp_, base_imu_offset);
   imu_meas_ = imu_meas_ * base_imu_offset;
-
-  imu_time_ = Time::now();
+  
   my_filter_.addMeasurement(StampedTransform(imu_meas_.inverse(), imu_stamp_, base_frame_, "imu"),
                             imu_covariance_);
 
@@ -311,7 +318,7 @@ void OdomEstimationNode::voCallback(const VoConstPtr& vo)
     for (unsigned int j = 0; j < 6; j++)
     {
       auto covar = vo->pose.covariance[6 * i + j];
-      if (covar)
+      if (!fix_vo_cov_ && covar)
       {
         vo_covariance_(i + 1, j + 1) = vo->pose.covariance[6 * i + j];
       }
@@ -319,19 +326,20 @@ void OdomEstimationNode::voCallback(const VoConstPtr& vo)
       {
         if (i == j && i <= 2)
         {
-          vo_covariance_(i + 1, j + 1) = 0.1;
+          vo_covariance_(i + 1, j + 1) = vo_cov_[0];
         }
         else if (i == j && i > 2)
         {
-          vo_covariance_(i + 1, j + 1) = 0.17;
+          vo_covariance_(i + 1, j + 1) = vo_cov_[1];
         }
         else
         {
-          vo_covariance_(i + 1, j + 1) = 0;
+          vo_covariance_(i + 1, j + 1) = vo_cov_[2];
         }
       }
     }
   }
+
   my_filter_.addMeasurement(StampedTransform(vo_meas_.inverse(), vo_stamp_, base_frame_, "vo"),
                             vo_covariance_);
 
@@ -426,11 +434,11 @@ void OdomEstimationNode::spin(const ros::TimerEvent& e)
   ROS_DEBUG("Spin function at time %f", ros::Time::now().toSec());
 
   // check for timing problems
-  if ((odom_initializing_ || odom_active_) && (imu_initializing_ || imu_active_))
+  if ((odom_initializing_ || odom_active_) && (vo_initializing_ || vo_active_))
   {
-    double diff = fabs(Duration(odom_stamp_ - imu_stamp_).toSec());
+    double diff = fabs(Duration(odom_stamp_ - vo_stamp_).toSec());
     if (diff > 1.0)
-      ROS_ERROR("Timestamps of odometry and imu are %f seconds apart.", diff);
+      ROS_ERROR("Timestamps of odometry and vo are %f seconds apart.", diff);
   }
 
   // initial value for filter stamp; keep this stamp when no sensors are active
